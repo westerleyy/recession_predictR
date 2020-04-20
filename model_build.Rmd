@@ -259,3 +259,30 @@ predict_y_factor <- predict(gbm_recession, newdata = testing)
 confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
 ```
 
+```{r gbm 3}
+final_econ_situation_nber_df <- econ_situation_nber_df %>%
+  select(`GDP (YoY % Change)`,`Probability of Losing a Job`:rate_change_period)
+testIDs <- createDataPartition(final_econ_situation_nber_df$`GDP (YoY % Change)`, p = 0.7, list = F)
+training <- final_econ_situation_nber_df[testIDs,]
+bootstrapIDs <- createResample(training$`GDP (YoY % Change)`, list = F)
+training_bootstrapped <- training[bootstrapIDs,]
+testing <- final_econ_situation_nber_df[-testIDs,]
+# model tuning 
+trctrl <- trainControl(method = "repeatedcv", 
+                       number = 10, repeats = 5)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+# gbm model 
+gbm_recession <- train(`GDP (YoY % Change)`~., data = training_bootstrapped,  method = "gbm", trControl = trctrl)
+plot(gbm_recession)
+stopCluster(cl)
+gbm_recession
+y_predict <- predict(gbm_recession, newdata = testing)
+testing$gdp_predict <- y_predict
+ggplot(testing, aes(x = `GDP (YoY % Change)`, y = gdp_predict)) + 
+  geom_point() + 
+  geom_abline(slope = 1)
+postResample(y_predict, obs = testing$`GDP (YoY % Change)`)
+```
+
+
