@@ -59,6 +59,12 @@ business_tendencies <- cbind(business_tendenc, distance_peak)
 business_tendencies[is.na(business_tendencies)] <- 0
 write.csv(business_tendencies, "business_tendencies.csv")
 
+## pct labor force unemloyed for more than 15 weeks
+LT_unemployed <- fredr(series_id = "U1RATE", observation_start = as.Date("1973-01-01"))
+
+
+
+
 # load dataset
 # API call allows for output to be in JSON or XML; picked JSON for ease 
 # UPDATE: GOD DAMN IT I FOUND A SIMPLER WAY AFTER KILLING A TON OF BRAINCELLS TRYING TO UNNEST A JSON | EIA has a package to do this

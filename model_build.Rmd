@@ -20,6 +20,8 @@ library(ggpmisc)
 library(zoo)
 library(plotly)
 library(caret)
+library(gbm)
+library(doParallel)
 
 # load API key
 eia_api_key <- readtext::readtext("eia_api_key.txt") %>%
@@ -34,12 +36,14 @@ electricity <- read_csv("monthly_electricity.csv")
 rigs <- read_csv("monthly_rigs_count.csv")
 gdp <- readxl::read_excel("Monthly GDP for Project.xlsx")
 business_sentiment <- read_csv("business_tendencies.csv")
+## pct labor force unemloyed for more than 15 weeks
+LT_unemployed <- fredr(series_id = "U1RATE", observation_start = as.Date("1973-01-01"))
 ```
 
 ## Data Processing  
 
 Relevant time scale: Monthly  
-Datasets: Electricity generation, Rigs count, GDP, OECD Business Tendency Survey  
+Datasets: Electricity generation, Rigs count, GDP, OECD Business Tendency Survey, Percentage of Civilian Workforce Unemployed >15 weeks  
   
 At first, I used the GDP data to determine whether there is a recession that particular quarter or not. But I realized that it is better to use the NBER-defined recession months. So that is what I did. Use the HTML table to compare between the self-defined recession months and NBER-defined ones. 
 ```{r data wrangling}
@@ -81,11 +85,37 @@ for (i in 2:dim(business_sentiment)[1]){
 }
 business_sentiment$sentiment_period <- sentiment_period
 
+LT_unemployed_complete <- LT_unemployed %>%
+  mutate(date = as.yearmon(substr(date, 1, 7)),
+         rate_change_first_order = (value - lag(value,1))/lag(value,1)) %>%
+  select(date, value, rate_change_first_order)
+colnames(LT_unemployed_complete)[2] <- "LT_unemployment"
+rate_change_period <- rep(0, dim(LT_unemployed_complete)[1])
+threshold_period <- rep(0, dim(LT_unemployed_complete)[1])
+for (i in 2:dim(LT_unemployed_complete)[1]){
+  sentiment_i = LT_unemployed_complete$rate_change_first_order[i]
+  #print(sentiment_i)
+  sentiment_h = LT_unemployed_complete$rate_change_first_order[i-1]
+  #print(sentiment_h)
+  sentiment_h[is.na(sentiment_h)] <- 0
+  if(sign(sentiment_i) == sign(sentiment_h)){
+    rate_change_period[i] = rate_change_period[i-1]+1
+  }
+  else{
+   rate_change_period[i] = 1
+  }
+  if(LT_unemployed_complete$LT_unemployment[i] <= 1.5){
+    threshold_period[i] = threshold_period[i-1]+1
+  }
+}
+LT_unemployed_complete$threshold_period <- threshold_period
+LT_unemployed_complete$rate_change_period <- rate_change_period
 
 # inner join all together and to get recession dates
 econ_situation_nber_df <- inner_join(gdp_complete, electricity_complete, by = "date")
 econ_situation_nber_df <- inner_join(econ_situation_nber_df, rigs_complete, by = "date")
 econ_situation_nber_df <- inner_join(econ_situation_nber_df, business_sentiment, by = "date")
+econ_situation_nber_df <- inner_join(econ_situation_nber_df, LT_unemployed_complete, by = "date")
 NBER_recession_months <- econ_situation_nber_df$date %>%
   .[c(11:27, 85:90, 103:119, 211:219, 339:347, 420:438)]
 econ_situation_nber_df <- econ_situation_nber_df %>%
@@ -105,13 +135,13 @@ The model was trained and tested on a 70:30 randomly sampled split.
   
 How to read a confusion matrix? The diagonal running from top-left to bottom-right is the number of correct predictions. No Information Rate means that if the model just predicted `Y` all the time, it would get it right how many % of the time. So clearly, this random forest model is better.  
 
-```{r random_forest 2}
+```{r random_forest 1}
 set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
-train_x <- econ_situation_nber_df[testIDs,c(4:11)]
+train_x <- econ_situation_nber_df[testIDs,c(4:15)]
 train_y <- econ_situation_nber_df$NBER_recession_next[testIDs]
-test_x <- econ_situation_nber_df[-testIDs, c(4:11)]
+test_x <- econ_situation_nber_df[-testIDs, c(4:15)]
 test_y <- econ_situation_nber_df$NBER_recession_next[-testIDs] 
 
 # model tuning 
@@ -127,5 +157,105 @@ plot(rf_recession)
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
 
+```
+
+```{r gbm 1}
+final_econ_situation_nber_df <- econ_situation_nber_df %>%
+  select(rate_generated_change:rate_change_period, NBER_recession_next)
+testIDs <- createDataPartition(final_econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
+training <- final_econ_situation_nber_df[testIDs,]
+#bootstrapIDs <- createResample(training$NBER_recession_next, list = F)
+#training_bootstrapped <- training[bootstrapIDs,]
+testing <- final_econ_situation_nber_df[-testIDs,]
+# model tuning 
+trctrl <- trainControl(method = "repeatedcv", 
+                       number = 10, repeats = 10)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+# gbm model 
+gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
+plot(gbm_recession)
+stopCluster(cl)
+gbm_recession
+predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
+predict_y_factor <- predict(gbm_recession, newdata = testing)
+confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
+```
+
+### With Shorter Dataset
+
+```{r data wrangling 2}
+gdp_complete <- gdp %>%
+  mutate(date = as.yearmon(substr((Date), 1, 7)),
+         `GDP (Continuously Compounding)` = `GDP (Continuously Compounding)`*100,
+         `GDP (YoY % Change)` = `GDP (YoY % Change)`*100) %>%
+  drop_na() %>%
+  select(date, `GDP (YoY % Change)`, `GDP (Continuously Compounding)`, `Probability of Losing a Job`)
+
+# inner join all together and to get recession dates
+econ_situation_nber_df <- inner_join(gdp_complete, electricity_complete, by = "date")
+econ_situation_nber_df <- inner_join(econ_situation_nber_df, rigs_complete, by = "date")
+econ_situation_nber_df <- inner_join(econ_situation_nber_df, business_sentiment, by = "date")
+econ_situation_nber_df <- inner_join(econ_situation_nber_df, LT_unemployed_complete, by = "date")
+NBER_recession_months <- econ_situation_nber_df$date %>%
+  .[c(11:27, 85:90, 103:119, 211:219, 339:347, 420:438)]
+econ_situation_nber_df <- econ_situation_nber_df %>%
+  mutate(NBER_recession = ifelse(date %in% NBER_recession_months, "Y", "N"),
+         NBER_recession_next = as.factor(lead(NBER_recession,1))) %>%
+  as.data.frame() %>%
+  drop_na()
+
+#DT::datatable(econ_situation_nber_df)
+```
+
+```{r random_forest 2}
+set.seed(2507)
+# creating test-train data
+testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
+train_x <- econ_situation_nber_df[testIDs,c(4:16)]
+train_y <- econ_situation_nber_df$NBER_recession_next[testIDs]
+test_x <- econ_situation_nber_df[-testIDs, c(4:16)]
+test_y <- econ_situation_nber_df$NBER_recession_next[-testIDs] 
+
+
+# model tuning 
+trctrl <- trainControl(method = "repeatedcv", 
+                       number = 10, repeats = 10, search = "grid")
+mtry <- ncol(train_x)
+ntrees <- 71
+tunegrid <- expand.grid(.mtry = c(2:mtry))
+metric = "Accuracy"
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+# random forest model 
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+plot(rf_recession)
+predict_y <- predict(rf_recession, newdata = test_x)
+confusionMatrix(predict_y, reference = test_y)
+
+```
+
+```{r gbm 2}
+final_econ_situation_nber_df <- econ_situation_nber_df %>%
+  select(`Probability of Losing a Job`:rate_change_period, NBER_recession_next)
+testIDs <- createDataPartition(final_econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
+training <- final_econ_situation_nber_df[testIDs,]
+bootstrapIDs <- createResample(training$NBER_recession_next, list = F)
+training_bootstrapped <- training[bootstrapIDs,]
+testing <- final_econ_situation_nber_df[-testIDs,]
+# model tuning 
+trctrl <- trainControl(method = "repeatedcv", 
+                       number = 10, repeats = 5)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+# gbm model 
+gbm_recession <- train(NBER_recession_next~., data = training_bootstrapped,  method = "gbm", trControl = trctrl)
+plot(gbm_recession)
+stopCluster(cl)
+gbm_recession
+predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
+predict_y_factor <- predict(gbm_recession, newdata = testing)
+confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
 ```
 
