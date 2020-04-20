@@ -24,6 +24,40 @@ fredr_set_key(fred_api_key)
 ## get yield curve
 yield_curve <- fredr(series_id = "T10Y3M", observation_start=as.Date('2015-07-02'))
 
+## business tendenc
+business_tendenc <- fredr(series_id = "BSCICP03USM665S", observation_start = as.Date("1973-01-01"))
+
+## finding local peaks where m is the number of points on either side of the peak 
+find_peaks <- function (x, m = 3){
+  shape <- diff(sign(diff(x, na.pad = FALSE)))
+  pks <- sapply(which(shape < 0), FUN = function(i){
+    z <- i - m + 1
+    z <- ifelse(z > 0, z, 1)
+    w <- i + m + 1
+    w <- ifelse(w < length(x), w, length(x))
+    if(all(x[c(z : i, (i + 2) : w)] <= x[i + 1])) return(i + 1) else return(numeric(0))
+  })
+  pks <- unlist(pks)
+  pks
+}
+
+distance_from_peak <- function(current_position, peaks_vec, time_series_value){
+  distance <- peaks_vec-current_position
+  closest <- min(distance)
+  distance_pct <- (time_series_value[current_position] - time_series_value[closest])/time_series_value[closest]
+  distance_pct <- ifelse(is.null(distance_pct) == T, 0, distance_pct)
+  distance_pct
+}
+
+business_local_peaks <- find_peaks(business_tendenc$value)
+distance_peak <- sapply(1:dim(business_tendenc)[1], function(x){
+  distance_pct <- distance_from_peak(x, business_local_peaks, business_tendenc$value)
+  distance_pct
+})
+
+business_tendencies <- cbind(business_tendenc, distance_peak)
+business_tendencies[is.na(business_tendencies)] <- 0
+write.csv(business_tendencies, "business_tendencies.csv")
 
 # load dataset
 # API call allows for output to be in JSON or XML; picked JSON for ease 

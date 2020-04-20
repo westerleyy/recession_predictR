@@ -33,45 +33,64 @@ fredr_set_key(fred_api_key)
 electricity <- read_csv("monthly_electricity.csv")
 rigs <- read_csv("monthly_rigs_count.csv")
 gdp <- readxl::read_excel("Monthly GDP for Project.xlsx")
+business_sentiment <- read_csv("business_tendencies.csv")
 ```
 
 ## Data Processing  
 
 Relevant time scale: Monthly  
-Datasets: Electricity generation, Rigs count, GDP  
+Datasets: Electricity generation, Rigs count, GDP, OECD Business Tendency Survey  
   
 At first, I used the GDP data to determine whether there is a recession that particular quarter or not. But I realized that it is better to use the NBER-defined recession months. So that is what I did. Use the HTML table to compare between the self-defined recession months and NBER-defined ones. 
 ```{r data wrangling}
 gdp_complete <- gdp %>%
   mutate(date = as.yearmon(substr((Date), 1, 7)),
          `GDP (Continuously Compounding)` = `GDP (Continuously Compounding)`*100,
-         `GDP (YoY % Change)` = `GDP (YoY % Change)`*100,
-         recession = ifelse(`GDP (Continuously Compounding)` >= 0, "N", 
-                            ifelse(lag(`GDP (Continuously Compounding)`,1) >= 0, "N", 
-                                   ifelse(lag(`GDP (Continuously Compounding)`,2) >=0, "N", "Y"))),
-         recession_next = lead(recession, 1)) %>%
+         `GDP (YoY % Change)` = `GDP (YoY % Change)`*100) %>%
   filter(date >= "Jan 1973") %>%
-  select(date, `GDP (YoY % Change)`, `GDP (Continuously Compounding)`, recession, recession_next)
+  select(date, `GDP (YoY % Change)`, `GDP (Continuously Compounding)`)
 electricity_complete <- electricity %>%
   mutate(date = as.yearmon(date),
-         rate_generated_change = (value - lag(value,1))/lag(value,1)) %>%
+         rate_generated_change = (value - lag(value,1))/lag(value,1),
+         rate_generated_change_secondorder = (rate_generated_change - lag(rate_generated_change,1))/lag(rate_generated_change,1)) %>%
   filter(date <= "Nov 2019") %>%
-  select(date, rate_generated_change) 
+  select(date, rate_generated_change, rate_generated_change_secondorder) 
 rigs_complete <- rigs %>%
   mutate(date = as.yearmon(substr(date, 1, 7))) %>%
   select(date, change_first_order, change_second_order) %>%
   filter(date <= "Nov 2019")
 colnames(rigs_complete)[2:3] <- c("rigs_change_first_order", "rigs_change_second_order")
+business_sentiment <- business_sentiment %>%
+  mutate(date = as.yearmon(substr(date, 1, 7)),
+         sentiment_change_first_order = (value - lag(value,1))/lag(value,1)) %>%
+  select(date, value, distance_peak, sentiment_change_first_order)
+colnames(business_sentiment)[2] <- "business_sentiment"
+sentiment_period <- rep(0, dim(business_sentiment)[1])
+for (i in 2:dim(business_sentiment)[1]){
+  sentiment_i = business_sentiment$sentiment_change_first_order[i]
+  #print(sentiment_i)
+  sentiment_h = business_sentiment$sentiment_change_first_order[i-1]
+  #print(sentiment_h)
+  sentiment_h[is.na(sentiment_h)] <- 0
+  if(sign(sentiment_i) == sign(sentiment_h)){
+    sentiment_period[i] = sentiment_period[i-1]+1
+  }
+  else{
+    sentiment_period[i] = 1
+  }
+}
+business_sentiment$sentiment_period <- sentiment_period
 
 
 # inner join all together and to get recession dates
 econ_situation_nber_df <- inner_join(gdp_complete, electricity_complete, by = "date")
 econ_situation_nber_df <- inner_join(econ_situation_nber_df, rigs_complete, by = "date")
+econ_situation_nber_df <- inner_join(econ_situation_nber_df, business_sentiment, by = "date")
 NBER_recession_months <- econ_situation_nber_df$date %>%
   .[c(11:27, 85:90, 103:119, 211:219, 339:347, 420:438)]
 econ_situation_nber_df <- econ_situation_nber_df %>%
   mutate(NBER_recession = ifelse(date %in% NBER_recession_months, "Y", "N"),
-         NBER_recession_next = as.factor(lead(NBER_recession,2))) %>%
+         NBER_recession_next = as.factor(lead(NBER_recession,1))) %>%
   as.data.frame() %>%
   drop_na()
 
@@ -85,46 +104,26 @@ The model was given the data on change in electricity generation, and change in 
 The model was trained and tested on a 70:30 randomly sampled split. 
   
 How to read a confusion matrix? The diagonal running from top-left to bottom-right is the number of correct predictions. No Information Rate means that if the model just predicted `Y` all the time, it would get it right how many % of the time. So clearly, this random forest model is better.  
-```{r random_forests 1, echo=FALSE, eval = FALSE}
-set.seed(1728)
-# creating test-train data
-testIDs <- createDataPartition(econ_situation_df$recession_next, p = 0.7, list = F)
-train_x <- econ_situation_df[testIDs,c(2,3,6,7,8)]
-train_y <- econ_situation_df$recession_next[testIDs]
-test_x <- econ_situation_df[-testIDs, c(2,3,6,7,8)]
-test_y <- econ_situation_df$recession_next[-testIDs]
-
-# model tuning 
-trctrl <- trainControl(method = "cv", 
-                       number = 5)
-mtry <- sqrt(ncol(econ_situation_df))
-ntrees <- 51
-tunegrid <- expand.grid(.mtry = mtry)
-metric = "Accuracy"
-# random forest model 
-rf_recession <- train(x = test_x, y = test_y, method = "rf", metric = metric, tuneGrid = tunegrid, trControl = trctrl, ntree = ntrees)
-predict_y <- predict(rf_recession, newdata = test_x)
-confusionMatrix(predict_y, reference = test_y)
-```
 
 ```{r random_forest 2}
 set.seed(2507)
 # creating test-train data
-testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.6, list = F)
-train_x <- econ_situation_nber_df[testIDs,c(6,7,8)]
+testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
+train_x <- econ_situation_nber_df[testIDs,c(4:11)]
 train_y <- econ_situation_nber_df$NBER_recession_next[testIDs]
-test_x <- econ_situation_nber_df[-testIDs, c(6,7,8)]
-test_y <- econ_situation_nber_df$NBER_recession_next[-testIDs]
+test_x <- econ_situation_nber_df[-testIDs, c(4:11)]
+test_y <- econ_situation_nber_df$NBER_recession_next[-testIDs] 
 
 # model tuning 
-trctrl <- trainControl(method = "cv", 
-                       number = 5)
-#mtry <- sqrt(ncol(econ_situation_nber_df))
-ntrees <- 51
-#tunegrid <- expand.grid(.mtry = mtry)
+trctrl <- trainControl(method = "repeatedcv", 
+                       number = 10, repeats = 5, search = "grid")
+mtry <- ncol(train_x)
+ntrees <- 71
+tunegrid <- expand.grid(.mtry = c(2:mtry))
 metric = "Accuracy"
 # random forest model 
-rf_recession <- train(x = test_x, y = test_y, method = "rf", metric = metric, trControl = trctrl, ntree = ntrees)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+plot(rf_recession)
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
 
