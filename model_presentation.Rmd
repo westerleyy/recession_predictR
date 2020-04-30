@@ -1,0 +1,61 @@
+---
+title: "recession predictR"
+author: "Wesley Chioh | Jonathan O'Kane"
+date: "May 5, 2020"
+output: ioslides_presentation
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## introduction
+
+*"Macroeconomic forecasts are often made by separating two objectives: providing the growth rate of the variable of interest (usually GDP) and detecting turning points in the economic cycle."* - [Doz, Ferrara, and Pionnier, 2020](http://econbrowser.com/archives/2020/04/guest-contribution-business-cycle-dynamics-after-the-great-recession-an-extended-markov-switching-dynamic-factor-model)   
+  
+two models:  
+- linear regression: point estimates of future GDP  
+- random forest: using gdp and other variables to predict economic state  
+  
+## data sources  
+  
+- amt. of electricity generated (monthly) across lower 48 states  
+- number of active oil and gas rigs in the US  
+- long-term (>= 15weeks) unemployment rate  
+- US manufacturing industry confidence indicator  
+- yield curve  
+
+## Interactive Plot
+
+```{r eruptions}
+inputPanel(
+  selectInput("n_breaks", label = "Number of bins:",
+              choices = c(10, 20, 35, 50), selected = 20),
+  
+  sliderInput("bw_adjust", label = "Bandwidth adjustment:",
+              min = 0.2, max = 2, value = 1, step = 0.2)
+)
+
+renderPlot({
+  hist(faithful$eruptions, probability = TRUE, breaks = as.numeric(input$n_breaks),
+       xlab = "Duration (minutes)", main = "Geyser eruption duration")
+  
+  dens <- density(faithful$eruptions, adjust = input$bw_adjust)
+  lines(dens, col = "blue")
+})
+```
+
+## Bullets
+
+- Bullet 1
+- Bullet 2
+- Bullet 3
+
+## R Output
+
+```{r cars}
+summary(cars)
+```
+
+
