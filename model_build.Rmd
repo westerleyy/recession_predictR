@@ -22,6 +22,8 @@ library(plotly)
 library(caret)
 library(gbm)
 library(doParallel)
+library(stargazer)
+set.seed(1728)
 
 # load API key
 eia_api_key <- readtext::readtext("eia_api_key.txt") %>%
@@ -38,6 +40,8 @@ gdp <- readxl::read_excel("Monthly GDP for Project.xlsx")
 business_sentiment <- read_csv("business_tendencies.csv")
 ## pct labor force unemloyed for more than 15 weeks
 LT_unemployed <- fredr(series_id = "U1RATE", observation_start = as.Date("1973-01-01"))
+## yield curve 10year minue 3month
+yield_curve <- fredr(series_id = "T10Y3M", observation_start=as.Date('1947-01-01'))
 ```
 
 ## Data Processing  
@@ -110,6 +114,16 @@ for (i in 2:dim(LT_unemployed_complete)[1]){
 LT_unemployed_complete$threshold_period <- threshold_period
 LT_unemployed_complete$rate_change_period <- rate_change_period
 
+yield_curve[is.na(yield_curve)] <- 0
+yield_curve <- yield_curve %>%
+  drop_na() %>%
+  mutate(date = as.yearmon(substr(date, 1, 7)),
+         value = ifelse(value < 0, -1, 1)) %>%
+  group_by(date) %>%
+  summarise(value = min(value)) %>%
+  mutate(value = as.factor(value))
+colnames(yield_curve)[2] <- "curve"
+
 # inner join all together and to get recession dates
 econ_situation_nber_df <- inner_join(gdp_complete, electricity_complete, by = "date")
 econ_situation_nber_df <- inner_join(econ_situation_nber_df, rigs_complete, by = "date")
@@ -117,6 +131,7 @@ econ_situation_nber_df <- inner_join(econ_situation_nber_df, business_sentiment,
 econ_situation_nber_df <- inner_join(econ_situation_nber_df, LT_unemployed_complete, by = "date")
 NBER_recession_months <- econ_situation_nber_df$date %>%
   .[c(11:27, 85:90, 103:119, 211:219, 339:347, 420:438)]
+econ_situation_nber_df <- inner_join(econ_situation_nber_df, yield_curve, by = "date")
 econ_situation_nber_df <- econ_situation_nber_df %>%
   mutate(NBER_recession = ifelse(date %in% NBER_recession_months, "Y", "N"),
          NBER_recession_next = as.factor(lead(NBER_recession,1)),
@@ -126,6 +141,65 @@ econ_situation_nber_df <- econ_situation_nber_df %>%
 
 DT::datatable(econ_situation_nber_df)
 ```
+
+## Modeling Proper  
+  
+Throwing in all of the variables to test for omitted variable bias. 
+
+```{r probit}
+econ_situation_nber_df2 <- econ_situation_nber_df %>%
+  select(gdp_change_lagged:rate_change_period, NBER_recession_next)
+econ_situation_nber_df2[is.na(econ_situation_nber_df2)] <- 0
+econ_situation_nber_df2_iv <- econ_situation_nber_df2[,1:13]
+comboinfo <- findLinearCombos(econ_situation_nber_df2_iv)
+# inspecting the linear combo info, it appears that there are no linearly dependent variables 
+descrCor <- cor(econ_situation_nber_df2_iv)
+# inspecting  the correlation matrix, it appears that distance_peak is perfectly correlated with business sentiment so that should be removed
+econ_situation_nber_df2 <- econ_situation_nber_df2[,-7]
+recession_probit <- glm(NBER_recession_next ~., family = binomial(link = "probit"), data = econ_situation_nber_df2)
+summary(recession_probit)
+```
+
+
+
+
+```{r random_forest}
+# creating test-train data
+testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
+train_x <- econ_situation_nber_df[testIDs,c(5:17)]
+train_y <- econ_situation_nber_df$NBER_recession_next[testIDs]
+test_x <- econ_situation_nber_df[-testIDs, c(5:17)]
+test_y <- econ_situation_nber_df$NBER_recession_next[-testIDs] 
+
+# model tuning 
+trctrl <- trainControl(method = "repeatedcv", 
+                       number = 10, repeats = 5, search = "grid")
+mtry <- ncol(train_x)
+ntrees <- 101
+tunegrid <- expand.grid(.mtry = c(2:mtry))
+metric = "Accuracy"
+# following can be commented out if loading a pretrained model from file 
+# parallel processing to speed things up
+# random forest model 
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid, ntree = ntrees)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/rf_1mth_all.RDS")
+rf_recession <- readRDS("./models/rf_1mth_all.RDS")
+predict_y <- predict(rf_recession, newdata = test_x)
+predict_y_prob <- predict(rf_recession,newdata = test_x, "prob")
+predict_y_prob$date <- econ_situation_nber_df$date[-testIDs]
+predict_y_prob$actual <- test_y
+predict_y_prob$predicted <- predict_y
+confusionMatrix(predict_y, reference = test_y)
+ggplotly(ggplot(predict_y_prob, aes(x = date, y = Y)) +
+  geom_point(aes(color = actual)) + 
+  geom_hline(yintercept = 0.50))
+```
+
+
+
 
 
 ## Models
@@ -139,7 +213,6 @@ How to read a confusion matrix? The diagonal running from top-left to bottom-rig
 These model does  **NOT** include GDP growth data. It is a one-month forecast of whether the economy will be in a recession as defined by NBER.  
 
 ```{r random_forest 1A1}
-set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(5:16)]
@@ -157,11 +230,11 @@ metric = "Accuracy"
 # following can be commented out if loading a pretrained model from file 
 # parallel processing to speed things up
 # random forest model 
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/rf_1mth_woGDP.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/rf_1mth_woGDP.RDS")
 rf_recession <- readRDS("./models/rf_1mth_woGDP.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
@@ -174,14 +247,14 @@ testIDs <- createDataPartition(final_econ_situation_nber_df$NBER_recession_next,
 training <- final_econ_situation_nber_df[testIDs,]
 testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
-# trctrl <- trainControl(method = "repeatedcv", 
-#                        number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
+trctrl <- trainControl(method = "repeatedcv", 
+                      number = 10, repeats = 10)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
 # # gbm model 
-# gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
-#stopCluster(cl)
-# saveRDS(gbm_recession, "./models/gbm_1mth_woGDP.RDS")
+gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+saveRDS(gbm_recession, "./models/gbm_1mth_woGDP.RDS")
 gbm_recession <- readRDS("./models/gbm_1mth_woGDP.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
@@ -191,7 +264,6 @@ confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
 ### Random Forest and Stochastic Gradient Boosting 1A2  
 These models does  **NOT** include GDP growth data. It is a two-month forecast of whether the economy will be in a recession as defined by NBER.
 ```{r random_forest 1A2}
-set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(5:16)]
@@ -209,11 +281,11 @@ metric = "Accuracy"
 # following can be commented out if loading a pretrained model from file 
 # parallel processing to speed things up
 # random forest model 
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/rf_2mth_woGDP.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/rf_2mth_woGDP.RDS")
 rf_recession <- readRDS("./models/rf_2mth_woGDP.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
@@ -228,12 +300,12 @@ testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
 trctrl <- trainControl(method = "repeatedcv", 
                     number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
 # # gbm model 
-# gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
-# stopCluster(cl)
-# saveRDS(gbm_recession, "./models/gbm_2mth_woGDP.RDS")
+gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+saveRDS(gbm_recession, "./models/gbm_2mth_woGDP.RDS")
 gbm_recession <- readRDS("./models/gbm_2mth_woGDP.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
@@ -243,7 +315,6 @@ confusionMatrix(predict_y_factor, reference = testing$NBER_recession_two)
 These models include the present month's GDP growth data. It is a one-month forecast of whether the economy will be in a recession as defined by NBER.  
 
 ```{r random_forest 1B1}
-set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(2, 5:16)]
@@ -260,32 +331,34 @@ tunegrid <- expand.grid(.mtry = c(2:mtry))
 metric = "Accuracy"
 # random forest model 
 # enable parallel processing
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/rf_1mth_wGDP.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/rf_1mth_wGDP.RDS")
 rf_recession <- readRDS("./models/rf_1mth_wGDP.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
 ```
 
 ```{r gbm 1B1}
+set.seed(1995)
 final_econ_situation_nber_df <- econ_situation_nber_df %>%
   select(`GDP (YoY % Change)` ,rate_generated_change:rate_change_period, NBER_recession_next)
 testIDs <- createDataPartition(final_econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
 training <- final_econ_situation_nber_df[testIDs,]
 testing <- final_econ_situation_nber_df[-testIDs,]
+testing_time <- econ_situation_nber_df$date[-testIDs]
 # model tuning 
-# trctrl <- trainControl(method = "repeatedcv", 
-#                       number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
+ trctrl <- trainControl(method = "repeatedcv", 
+                       number = 10, repeats = 10)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
 # gbm model 
-# gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
-# stopCluster(cl)
-# saveRDS(gbm_recession, "./models/gbm_1mth_wGDP.RDS")
-gbm_recession <- readRDS("./models/gbm_1mth_wGDP.RDS") 
+gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+#saveRDS(gbm_recession, "./models/gbm_1mth_wGDP.RDS")
+#gbm_recession <- readRDS("./models/gbm_1mth_wGDP.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
 confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
@@ -295,9 +368,8 @@ confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
 These models includes the present month's GDP growth data. It is a two-month forecast of whether the economy will be in a recession as defined by NBER.  
 
 ```{r random_forest 1B2}
-set.seed(2507)
 # creating test-train data
-testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
+testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_two, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(2, 5:16)]
 train_y <- econ_situation_nber_df$NBER_recession_two[testIDs]
 test_x <- econ_situation_nber_df[-testIDs, c(2, 5:16)]
@@ -312,11 +384,11 @@ tunegrid <- expand.grid(.mtry = c(2:mtry))
 metric = "Accuracy"
 # random forest model 
 # enable parallel processing
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/rf_2mth_wGDP.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/rf_2mth_wGDP.RDS")
 rf_recession <- readRDS("./models/rf_2mth_wGDP.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
@@ -331,12 +403,12 @@ testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
 trctrl <- trainControl(method = "repeatedcv", 
                      number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
 # # gbm model 
-# gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
-# stopCluster(cl)
-# saveRDS(gbm_recession, "./models/gbm_2mth_wGDP.RDS")
+gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+saveRDS(gbm_recession, "./models/gbm_2mth_wGDP.RDS")
 gbm_recession <- readRDS("./models/gbm_2mth_wGDP.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
@@ -347,7 +419,6 @@ confusionMatrix(predict_y_factor, reference = testing$NBER_recession_two)
 This model includes the previous month's GDP growth data. It is a one-month forecast of whether the economy will be in a recession as defined by NBER.  
 
 ```{r random_forest 1C1}
-set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(4:16)]
@@ -376,32 +447,31 @@ confusionMatrix(predict_y, reference = test_y)
   
 ```{r gbm 1C1}
 final_econ_situation_nber_df <- econ_situation_nber_df %>%
-  select(gdp_change_lagged:rate_change_period, NBER_recession_two)
-testIDs <- createDataPartition(final_econ_situation_nber_df$NBER_recession_two, p = 0.7, list = F)
+  select(gdp_change_lagged:rate_change_period, NBER_recession_next)
+testIDs <- createDataPartition(final_econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
 training <- final_econ_situation_nber_df[testIDs,]
 testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
-# trctrl <- trainControl(method = "repeatedcv", 
-#                       number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
+trctrl <- trainControl(method = "repeatedcv", 
+                     number = 10, repeats = 10)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
 # gbm model 
-# gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
-# stopCluster(cl)
-# saveRDS(gbm_recession, "./models/gbm_1mth_wGDP_lagged.RDS")
+gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+saveRDS(gbm_recession, "./models/gbm_1mth_wGDP_lagged.RDS")
 gbm_recession <- readRDS("./models/gbm_1mth_wGDP_lagged.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
-confusionMatrix(predict_y_factor, reference = testing$NBER_recession_two)
+confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
 ```  
   
 ### Random Forest 1C2  
 This model includes the previous month's GDP growth data. It is a two-month forecast of whether the economy will be in a recession as defined by NBER.  
 
 ```{r random_forest 1C2}
-set.seed(2507)
 # creating test-train data
-testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
+testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_two, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(4:16)]
 train_y <- econ_situation_nber_df$NBER_recession_two[testIDs]
 test_x <- econ_situation_nber_df[-testIDs, c(4:16)]
@@ -416,11 +486,11 @@ tunegrid <- expand.grid(.mtry = c(2:mtry))
 metric = "Accuracy"
 # random forest model 
 # enable parallel processing
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/rf_2mth_wGDP_lagged.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/rf_2mth_wGDP_lagged.RDS")
 rf_recession <- readRDS("./models/rf_2mth_wGDP_lagged.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
@@ -428,23 +498,23 @@ confusionMatrix(predict_y, reference = test_y)
   
 ```{r gbm 1C2}
 final_econ_situation_nber_df <- econ_situation_nber_df %>%
-  select(gdp_change_lagged:rate_change_period, NBER_recession_next)
-testIDs <- createDataPartition(final_econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
+  select(gdp_change_lagged:rate_change_period, NBER_recession_two)
+testIDs <- createDataPartition(final_econ_situation_nber_df$NBER_recession_two, p = 0.7, list = F)
 training <- final_econ_situation_nber_df[testIDs,]
 testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
 trctrl <- trainControl(method = "repeatedcv", 
                       number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# # gbm model 
-# gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
-# stopCluster(cl)
-# saveRDS(gbm_recession, "./models/gbm_2mth_wGDP_lagged.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+# gbm model 
+gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+saveRDS(gbm_recession, "./models/gbm_2mth_wGDP_lagged.RDS")
 gbm_recession <- readRDS("./models/gbm_2mth_wGDP_lagged.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
-confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
+confusionMatrix(predict_y_factor, reference = testing$NBER_recession_two)
 ```  
   
 ### With Shorter Dataset
@@ -479,7 +549,6 @@ econ_situation_nber_df <- econ_situation_nber_df %>%
 These model does  **NOT** include GDP growth data. It is a one-month forecast of whether the economy will be in a recession as defined by NBER.  
 
 ```{r random_forest 2A1}
-set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(5:17)]
@@ -497,11 +566,11 @@ metric = "Accuracy"
 # following can be commented out if loading a pretrained model from file 
 # parallel processing to speed things up
 # random forest model 
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/jolts_rf_1mth_woGDP.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/jolts_rf_1mth_woGDP.RDS")
 rf_recession <- readRDS("./models/jolts_rf_1mth_woGDP.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
@@ -514,14 +583,14 @@ testIDs <- createDataPartition(final_econ_situation_nber_df$NBER_recession_next,
 training <- final_econ_situation_nber_df[testIDs,]
 testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
-# trctrl <- trainControl(method = "repeatedcv", 
-#                       number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# # # gbm model 
-# gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
-# saveRDS(gbm_recession, "./models/jolts_gbm_1mth_woGDP.RDS")
-#stopCluster(cl)
+trctrl <- trainControl(method = "repeatedcv", 
+                     number = 10, repeats = 10)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+# gbm model 
+gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+saveRDS(gbm_recession, "./models/jolts_gbm_1mth_woGDP.RDS")
 gbm_recession <- readRDS("./models/jolts_gbm_1mth_woGDP.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
@@ -531,7 +600,6 @@ confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
 ### Random Forest and Stochastic Gradient Boosting 1A2  
 These models does  **NOT** include GDP growth data. It is a two-month forecast of whether the economy will be in a recession as defined by NBER.
 ```{r random_forest 2A2}
-set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_two, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(5:17)]
@@ -549,11 +617,11 @@ metric = "Accuracy"
 # following can be commented out if loading a pretrained model from file 
 # parallel processing to speed things up
 # random forest model 
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/jolts_rf_2mth_woGDP.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/jolts_rf_2mth_woGDP.RDS")
 rf_recession <- readRDS("./models/jolts_rf_2mth_woGDP.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
@@ -566,14 +634,14 @@ testIDs <- createDataPartition(final_econ_situation_nber_df$NBER_recession_two, 
 training <- final_econ_situation_nber_df[testIDs,]
 testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
-# trctrl <- trainControl(method = "repeatedcv", 
-#                      number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
+trctrl <- trainControl(method = "repeatedcv", 
+                  number = 10, repeats = 10)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
 # gbm model 
-# gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
-# stopCluster(cl)
-# saveRDS(gbm_recession, "./models/jolts_gbm_2mth_woGDP.RDS")
+gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+saveRDS(gbm_recession, "./models/jolts_gbm_2mth_woGDP.RDS")
 gbm_recession <- readRDS("./models/jolts_gbm_2mth_woGDP.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
@@ -583,7 +651,6 @@ confusionMatrix(predict_y_factor, reference = testing$NBER_recession_two)
 These models include the present month's GDP growth data. It is a one-month forecast of whether the economy will be in a recession as defined by NBER.  
 
 ```{r random_forest 2B1}
-set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(3, 5:17)]
@@ -600,11 +667,11 @@ tunegrid <- expand.grid(.mtry = c(2:mtry))
 metric = "Accuracy"
 # random forest model 
 # enable parallel processing
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/jolts_rf_1mth_wGDP.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/jolts_rf_1mth_wGDP.RDS")
 rf_recession <- readRDS("./models/jolts_rf_1mth_wGDP.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
@@ -619,12 +686,12 @@ testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
 trctrl <- trainControl(method = "repeatedcv", 
                      number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
 ## gbm model 
-# gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
-# saveRDS(gbm_recession, "./models/jolts_gbm_1mth_wGDP.RDS")
-# stopCluster(cl)
+gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
+saveRDS(gbm_recession, "./models/jolts_gbm_1mth_wGDP.RDS")
+stopCluster(cl)
 gbm_recession <- readRDS("./models/jolts_gbm_1mth_wGDP.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
@@ -635,7 +702,6 @@ confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
 These models includes the present month's GDP growth data. It is a two-month forecast of whether the economy will be in a recession as defined by NBER.  
 
 ```{r random_forest 2B2}
-set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_two, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(2, 4:17)]
@@ -652,11 +718,11 @@ tunegrid <- expand.grid(.mtry = c(2:mtry))
 metric = "Accuracy"
 # random forest model 
 # enable parallel processing
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/jolts_rf_2mth_wGDP.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/jolts_rf_2mth_wGDP.RDS")
 rf_recession <- readRDS("./models/jolts_rf_2mth_wGDP.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
@@ -671,12 +737,12 @@ testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
 trctrl <- trainControl(method = "repeatedcv", 
                      number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# gbm model 
-# gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
-# stopCluster(cl)
-# saveRDS(gbm_recession, "./models/gbm_2mth_wGDP.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+#gbm model 
+gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+saveRDS(gbm_recession, "./models/gbm_2mth_wGDP.RDS")
 gbm_recession <- readRDS("./models/gbm_2mth_wGDP.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
@@ -687,7 +753,6 @@ confusionMatrix(predict_y_factor, reference = testing$NBER_recession_two)
 This model includes the previous month's GDP growth data. It is a one-month forecast of whether the economy will be in a recession as defined by NBER.  
 
 ```{r random_forest 2C1}
-set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(2, 5:17)]
@@ -704,11 +769,11 @@ tunegrid <- expand.grid(.mtry = c(2:mtry))
 metric = "Accuracy"
 # random forest model 
 # enable parallel processing
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/jolts_rf_1mth_wGDP_lagged.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/jolts_rf_1mth_wGDP_lagged.RDS")
 rf_recession <- readRDS("./models/jolts_rf_1mth_wGDP_lagged.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
@@ -723,12 +788,12 @@ testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
 trctrl <- trainControl(method = "repeatedcv", 
                      number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# ##gbm model 
-# gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
-# saveRDS(gbm_recession, "./models/jolts_gbm_1mth_wGDP_lagged.RDS")
-# stopCluster(cl)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+##gbm model 
+gbm_recession <- train(NBER_recession_next~., data = training,  method = "gbm", trControl = trctrl)
+saveRDS(gbm_recession, "./models/jolts_gbm_1mth_wGDP_lagged.RDS")
+stopCluster(cl)
 gbm_recession <- readRDS("./models/jolts_gbm_1mth_wGDP_lagged.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
@@ -739,7 +804,6 @@ confusionMatrix(predict_y_factor, reference = testing$NBER_recession_next)
 These models includes the previous month's GDP growth data. It is a two-month forecast of whether the economy will be in a recession as defined by NBER.  
 
 ```{r random_forest 2C2}
-set.seed(2507)
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_two, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(2, 5:17)]
@@ -756,11 +820,11 @@ tunegrid <- expand.grid(.mtry = c(2:mtry))
 metric = "Accuracy"
 # random forest model 
 # enable parallel processing
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/jolts_rf_2mth_wGDP_lagged.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/jolts_rf_2mth_wGDP_lagged.RDS")
 rf_recession <- readRDS("./models/jolts_rf_2mth_wGDP_lagged.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 confusionMatrix(predict_y, reference = test_y)
@@ -775,12 +839,12 @@ testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
 trctrl <- trainControl(method = "repeatedcv", 
                       number = 10, repeats = 10)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# # gbm model 
-# gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
-#stopCluster(cl)
-# saveRDS(gbm_recession, "./models/jolts_gbm_2mth_wGDP_lagged.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+# gbm model 
+gbm_recession <- train(NBER_recession_two~., data = training,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+saveRDS(gbm_recession, "./models/jolts_gbm_2mth_wGDP_lagged.RDS")
 gbm_recession <- readRDS("./models/jolts_gbm_2mth_wGDP_lagged.RDS") 
 predict_y_prob <- predict(gbm_recession, newdata = testing, type = "prob")
 predict_y_factor <- predict(gbm_recession, newdata = testing)
@@ -801,12 +865,12 @@ testing <- final_econ_situation_nber_df[-testIDs,]
 # model tuning 
 trctrl <- trainControl(method = "repeatedcv", 
                        number = 10, repeats = 5)
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# # gbm model 
-# gbm_recession <- train(`GDP (YoY % Change)`~., data = training_bootstrapped,  method = "gbm", trControl = trctrl)
-# stopCluster(cl)
-# saveRDS(gbm_recession, "./models/jolts_gbm_GDPChange.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+# gbm model 
+gbm_recession <- train(`GDP (YoY % Change)`~., data = training_bootstrapped,  method = "gbm", trControl = trctrl)
+stopCluster(cl)
+saveRDS(gbm_recession, "./models/jolts_gbm_GDPChange.RDS")
 gbm_recession <- readRDS("./models/jolts_gbm_GDPChange.RDS") 
 y_predict <- predict(gbm_recession, newdata = testing)
 testing$gdp_predict <- y_predict
