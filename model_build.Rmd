@@ -245,6 +245,7 @@ prob_model
 ```
 
 ```{r plotting random forest}
+# https://shiring.github.io/machine_learning/2017/03/16/rf_plot_ggraph
 
 tree_func <- function(final_model, 
                       tree_num) {
