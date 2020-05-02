@@ -43,11 +43,14 @@ find_peaks <- function (x, m = 3){
 }
 
 distance_from_peak <- function(current_position, peaks_vec, time_series_value){
+  if (current_position > peaks_vec[1]){
   distance <- peaks_vec-current_position
   closest <- min(distance)
-  distance_pct <- (time_series_value[current_position] - time_series_value[closest])/time_series_value[closest]
+  distance_pct <- (time_series_value[current_position] - time_series_value[current_position+closest])/time_series_value[current_position+closest]
   distance_pct <- ifelse(is.null(distance_pct) == T, 0, distance_pct)
   distance_pct
+  } else { distance_pct <- 0
+  distance_pct}
 }
 
 business_local_peaks <- find_peaks(business_tendenc$value)

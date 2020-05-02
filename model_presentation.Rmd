@@ -95,6 +95,14 @@ rf_recession <- train(x = train_x, y = train_y, method = "rf",
 stopCluster(cl)
 ```
 
+## beneath the canopy  
+left-split <= s; right-split >s where s is split 
+```{r, warning=FALSE, message=FALSE}
+tree_plot <- readRDS("./models/tree_plot.RDS")
+# if split is k, LHS is <= k,RHS is >k
+tree_plot
+```
+
 
 ## results
 with a **70-30** training-test split:  
@@ -103,7 +111,7 @@ with a **70-30** training-test split:
 rf_cm <- readRDS("./models/confusion_matrix_1mth_all.RDS")
 kable(rf_cm$table, caption = "confusion matrix | pred (v), ref (h)") %>%
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = T, position = "left")
-kable(t(rf_cm$byClass[5:8]), caption = "random forest performance") %>%
+kable(cbind(t(rf_cm$byClass[5:8]),t(rf_cm$overall[1])), caption = "random forest performance") %>%
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = F, position = "left")
 ```
 
@@ -120,7 +128,7 @@ rf_prob_plot
 rf_cm <- readRDS("./models/confusion_matrix_2mth_all.RDS")
 kable(rf_cm$table, caption = "confusion matrix | pred (v), ref (h)") %>%
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = T, position = "left")
-kable(t(rf_cm$byClass[5:8]), caption = "random forest performance") %>%
+kable(cbind(t(rf_cm$byClass[5:8]),t(rf_cm$overall[1])), caption = "random forest performance") %>%
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = F, position = "left")
 ```
 
