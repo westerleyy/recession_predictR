@@ -143,7 +143,7 @@ DT::datatable(econ_situation_nber_df)
   
 Throwing in all of the variables to test for omitted variable bias. 
 
-```{r probit}
+```{r probit eval = FALSE, echo = FALSE}
 econ_situation_nber_df2 <- econ_situation_nber_df %>%
   select(gdp_change_lagged:rate_change_period, NBER_recession_next)
 econ_situation_nber_df2[is.na(econ_situation_nber_df2)] <- 0
@@ -153,14 +153,14 @@ comboinfo <- findLinearCombos(econ_situation_nber_df2_iv)
 descrCor <- cor(econ_situation_nber_df2_iv)
 # inspecting  the correlation matrix, it appears that distance_peak is perfectly correlated with business sentiment so that should be removed
 econ_situation_nber_df2 <- econ_situation_nber_df2[,-7]
-recession_probit <- glm(NBER_recession_next ~., family = binomial(link = "probit"), data = econ_situation_nber_df2)
+recession_probit <- glm(NBER_recession_next ~., family = binomial(link = "probit"), data = econ_situation_nber_df)
 summary(recession_probit)
 ```
 
 
 
 
-```{r random_forest, fig.height=8, fig.width=8}
+```{r random_forest two month, fig.height=8, fig.width=8}
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_two, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(4:17)]
@@ -178,11 +178,11 @@ metric = "Accuracy"
 # following can be commented out if loading a pretrained model from file 
 # parallel processing to speed things up
 # random forest model 
-cl <- makePSOCKcluster(5)
-registerDoParallel(cl)
-rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid, ntree = ntrees)
-stopCluster(cl)
-saveRDS(rf_recession, "./models/rf_2mth_all.RDS")
+# cl <- makePSOCKcluster(5)
+# registerDoParallel(cl)
+# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid, ntree = ntrees)
+# stopCluster(cl)
+# saveRDS(rf_recession, "./models/rf_2mth_all.RDS")
 rf_recession <- readRDS("./models/rf_2mth_all.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 predict_y_prob <- predict(rf_recession,newdata = test_x, "prob")
@@ -202,7 +202,7 @@ saveRDS(prob_model_2, "./models/ggplot_prob_model_2.RDS")
 prob_model_2
 ```
 
-```{r random forest twomonth}
+```{r random forest onemonth}
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
 train_x <- econ_situation_nber_df[testIDs,c(4:17)]
@@ -233,7 +233,7 @@ predict_y_prob$actual <- test_y
 predict_y_prob$predicted <- predict_y
 cm_1mth_all <- confusionMatrix(predict_y, reference = test_y)
 saveRDS(cm_1mth_all, "./models/confusion_matrix_1mth_all.RDS")
-cm_1mth_all$byClass
+cm_1mth_all$overall
 
 prob_model <- ggplotly(ggplot(predict_y_prob, aes(x = date, y = Y)) +
                          geom_point(aes(color = actual)) + 
@@ -244,6 +244,62 @@ saveRDS(prob_model, "./models/ggplot_prob_model.RDS")
 prob_model
 ```
 
+```{r plotting random forest}
+# https://shiring.github.io/machine_learning/2017/03/16/rf_plot_ggraph
+
+tree_func <- function(final_model, 
+                      tree_num) {
+  
+  # get tree by index
+  tree <- randomForest::getTree(final_model, 
+                                k = tree_num, 
+                                labelVar = TRUE) %>%
+    tibble::rownames_to_column() %>%
+    # make leaf split points to NA, so the 0s won't get plotted
+    mutate(`split point` = ifelse(is.na(prediction), `split point`, NA))
+  
+  # prepare data frame for graph
+  graph_frame <- data.frame(from = rep(tree$rowname, 2),
+                            to = c(tree$`left daughter`, tree$`right daughter`))
+  
+  # convert to graph and delete the last node that we don't want to plot
+  graph <- graph_from_data_frame(graph_frame) %>%
+    delete_vertices("0")
+  
+  # set node labels
+  V(graph)$node_label <- gsub("_", " ", as.character(tree$`split var`))
+  V(graph)$leaf_label <- as.character(tree$prediction)
+  V(graph)$split <- as.character(round(tree$`split point`, digits = 2))
+  
+  # plot
+  plot <- ggraph(graph, 'dendrogram') + 
+    theme_bw() +
+    geom_edge_link() +
+    geom_node_point() +
+    geom_node_text(aes(label = node_label), na.rm = TRUE, repel = TRUE) +
+    geom_node_label(aes(label = split), vjust = 2.5, na.rm = TRUE, fill = "white") +
+    geom_node_label(aes(label = leaf_label, fill = leaf_label), na.rm = TRUE, 
+					repel = TRUE, colour = "white", fontface = "bold", show.legend = FALSE) +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.background = element_blank(),
+          plot.background = element_rect(fill = "white"),
+          panel.border = element_blank(),
+          axis.line = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          plot.title = element_text(size = 18))
+  
+  print(plot)
+}
+
+tree_num <- which(rf_recession$finalModel$forest$ndbigtree == min(rf_recession$finalModel$forest$ndbigtree))
+tree_plot <- tree_func(final_model = rf_recession$finalModel, 12)
+saveRDS(tree_plot, "./models/tree_plot.RDS")
+```
 
 
 
