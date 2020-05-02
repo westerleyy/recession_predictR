@@ -14,7 +14,10 @@ library(tidyverse)
 library(RCurl)
 library(haven)
 fredr_set_key('30e6ecb242a73869e11cb35f6aa3afc3') # My key, please don't abuse.
+Pull <- readxl::read_excel("Pull.xlsx")
 
+# Please dont use attach because its easy to mistake cols with other dfs in multi-df envts.
+# remember to detach once you are done to avoid errors down the line
 attach(Pull)
 
 LOGY= log(Y) 
@@ -32,7 +35,7 @@ TestX1
 stargazer(TestX1, type="text", title="Baseline Results", single.row=TRUE, 
           ci=TRUE, ci.level=0.95)
 A1=(X1+X1Squared)
-
+summary(TestX1)
 # X2 Functional Form Test
 
 X2Squared= X2*X2
@@ -148,6 +151,47 @@ CurrentGDP=lm(GDP_LOG~ A1+A2+A3+A4+A5+A6+A7+A8+A9+A10+A11)
 CurrentGDP
 stargazer(CurrentGDP, type="text", title="Baseline Results", single.row=TRUE, 
           ci=TRUE, ci.level=0.95)
+# Detach
+detach(Pull)
+
+# Gathering all predictors 
+
+predictors <- cbind(A1,A2,A3,A4,A5,A6,A7,A8,A9,A10,A11,GDP_LOG) %>%
+  as.data.frame()
+
+saveRDS(predictors, "predictors.RDS")
+# function to automate lag calculation
+lagged_predictors <- function(n_lags, predictor_df, n_predictors=12){
+  pred_df <- sapply(1:n_predictors, function(x){
+    lag(predictor_df[,x],n_lags)
+  } )
+  pred_df <- as.data.frame(pred_df)
+  return(pred_df)
+}
+
+set.seed(1728)
+
+
+# one month lag
+predictors_oml <- lagged_predictors(1,predictors)
+predictors_oml <- cbind(GDP_LOG, predictors_oml) %>%
+  drop_na()
+
+# sampling then testing
+testIDs <- sample(1:dim(predictors_oml)[1], 0.8*dim(predictors_oml)[1])
+training_predictors_oml <- predictors_oml[testIDs,]
+testing_predictors_oml <- predictors_oml[-testIDs,]
+gdp_oml_lm <- lm(GDP_LOG ~., data = training_predictors_oml)
+summary(gdp_oml_lm)
+
+pred_gdp_log_oml <- predict.lm(gdp_oml_lm, newdata = testing_predictors_oml)
+
+ggplot() + 
+  geom_point(aes(x = testing_predictors_oml$GDP_LOG, y = pred_gdp_log_oml)) + 
+  geom_abline(intercept = 0, slope = 1) + 
+  labs(x = "Actual Logged GDP",
+       y = "Predicted Logged GDP")
+
 
 #One Month Lag Model 
 
@@ -166,6 +210,7 @@ OML11=Lag(A11,1)
 GDP_LOG_OneMonthLag=lag(GDP_LOG,1)
 
 GDP_OML= lm(GDP_LOG~OML1+OML2+OML3+OML6+OML7+OML8+OML10+GDP_LOG_OneMonthLag)
+
 
 
 GDP_OML

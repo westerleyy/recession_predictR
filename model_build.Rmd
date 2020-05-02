@@ -11,12 +11,8 @@ knitr::opts_chunk$set(echo = TRUE)
 # setting up shop 
 library(tidyverse)
 library(ggplot2)
-library(rjson)
-library(jsonlite)
 library(eia)
-library(ggfortify)
 library(fredr)
-library(ggpmisc)
 library(zoo)
 library(plotly)
 library(caret)
@@ -135,7 +131,8 @@ econ_situation_nber_df <- inner_join(econ_situation_nber_df, yield_curve, by = "
 econ_situation_nber_df <- econ_situation_nber_df %>%
   mutate(NBER_recession = ifelse(date %in% NBER_recession_months, "Y", "N"),
          NBER_recession_next = as.factor(lead(NBER_recession,1)),
-         NBER_recession_two = as.factor(lead(NBER_recession,2))) %>%
+         NBER_recession_two = as.factor(lead(NBER_recession,2))
+         ) %>%
   as.data.frame() %>%
   drop_na()
 
@@ -163,12 +160,54 @@ summary(recession_probit)
 
 
 
-```{r random_forest}
+```{r random_forest, fig.height=8, fig.width=8}
+# creating test-train data
+testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_two, p = 0.7, list = F)
+train_x <- econ_situation_nber_df[testIDs,c(4:17)]
+train_y <- econ_situation_nber_df$NBER_recession_two[testIDs]
+test_x <- econ_situation_nber_df[-testIDs, c(4:17)]
+test_y <- econ_situation_nber_df$NBER_recession_two[-testIDs] 
+
+# model tuning 
+trctrl <- trainControl(method = "repeatedcv", 
+                       number = 10, repeats = 5, search = "grid")
+mtry <- ncol(train_x)
+ntrees <- 101
+tunegrid <- expand.grid(.mtry = c(2:mtry))
+metric = "Accuracy"
+# following can be commented out if loading a pretrained model from file 
+# parallel processing to speed things up
+# random forest model 
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid, ntree = ntrees)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/rf_2mth_all.RDS")
+rf_recession <- readRDS("./models/rf_2mth_all.RDS")
+predict_y <- predict(rf_recession, newdata = test_x)
+predict_y_prob <- predict(rf_recession,newdata = test_x, "prob")
+predict_y_prob$date <- econ_situation_nber_df$date[-testIDs]
+predict_y_prob$actual <- test_y
+predict_y_prob$predicted <- predict_y
+cm_2mth_all <- confusionMatrix(predict_y, reference = test_y)
+saveRDS(cm_2mth_all, "./models/confusion_matrix_2mth_all.RDS")
+cm_2mth_all$byClass
+
+prob_model_2 <- ggplotly(ggplot(predict_y_prob, aes(x = date, y = Y)) +
+                         geom_point(aes(color = actual)) + 
+                         geom_hline(yintercept = 0.50) + 
+                         labs(y = "Probability", x = "Date", colour = "NBER", 
+                              title = "Probability of a Recession 2 Months Ahead", subtitle = "Probabilistic Prediction of a Random Forest Model"))
+saveRDS(prob_model_2, "./models/ggplot_prob_model_2.RDS")
+prob_model_2
+```
+
+```{r random forest twomonth}
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_next, p = 0.7, list = F)
-train_x <- econ_situation_nber_df[testIDs,c(5:17)]
+train_x <- econ_situation_nber_df[testIDs,c(4:17)]
 train_y <- econ_situation_nber_df$NBER_recession_next[testIDs]
-test_x <- econ_situation_nber_df[-testIDs, c(5:17)]
+test_x <- econ_situation_nber_df[-testIDs, c(4:17)]
 test_y <- econ_situation_nber_df$NBER_recession_next[-testIDs] 
 
 # model tuning 
@@ -192,12 +231,18 @@ predict_y_prob <- predict(rf_recession,newdata = test_x, "prob")
 predict_y_prob$date <- econ_situation_nber_df$date[-testIDs]
 predict_y_prob$actual <- test_y
 predict_y_prob$predicted <- predict_y
-confusionMatrix(predict_y, reference = test_y)
-ggplotly(ggplot(predict_y_prob, aes(x = date, y = Y)) +
-  geom_point(aes(color = actual)) + 
-  geom_hline(yintercept = 0.50))
-```
+cm_1mth_all <- confusionMatrix(predict_y, reference = test_y)
+saveRDS(cm_1mth_all, "./models/confusion_matrix_1mth_all.RDS")
+cm_1mth_all$byClass
 
+prob_model <- ggplotly(ggplot(predict_y_prob, aes(x = date, y = Y)) +
+                         geom_point(aes(color = actual)) + 
+                         geom_hline(yintercept = 0.50) + 
+                         labs(y = "Probability", x = "Date", colour = "NBER", 
+                              title = "Probability of a Recession a Month Ahead", subtitle = "Probabilistic Prediction of a Random Forest Model"))
+saveRDS(prob_model, "./models/ggplot_prob_model.RDS")
+prob_model
+```
 
 
 
