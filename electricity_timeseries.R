@@ -9,6 +9,7 @@ library(fredr)
 library(ggpmisc)
 library(zoo)
 library(plotly)
+library(lubridate)
 
 # load API key
 eia_api_key <- readtext::readtext("eia_api_key.txt") %>%
@@ -176,7 +177,7 @@ ggplot(lower48_daily_generation_df, aes(x = day, y = value)) +
 ## operating data
 
 ## electricity retail sales to industrial
-## last updated 3/26
+## last updated 4/26
 electricity_sales_industrial_monthly <- eia_series(id = "TOTAL.ESICBUS.M")
 electricity_sales_industrial_monthly_df <- unnest(all_electricity_generation_monthly, cols = "data") %>%
   select(series_id, units, value, date, year, month)
@@ -197,6 +198,7 @@ total_rigs <- eia_series(id = "TOTAL.OGNRPUS.M")
 total_rigs_df <- unnest(total_rigs, cols = "data") %>%
   select(series_id, units, value, date, year, month)
 total_rigs_df <- total_rigs_df %>%
+  arrange(date) %>%
   mutate(change_first_order = round((value - lag(value, 1))/lag(value,1),4),
          change_second_order = ifelse(lag(change_first_order,1) == 0, 0, (change_first_order - lag(change_first_order, 1))/lag(change_first_order,1)))
 

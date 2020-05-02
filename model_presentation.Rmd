@@ -8,6 +8,9 @@ runtime: shiny
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
+library(kableExtra)
+library(tidyverse)
+library(ggplot2)
 ```
 
 ## introduction
@@ -18,44 +21,117 @@ two models:
 - linear regression: point estimates of future GDP  
 - random forest: using gdp and other variables to predict economic state  
   
-## data sources  
+## regression data sources  
   
+  
+## random forest data sources  
+  
+- gdp  
 - amt. of electricity generated (monthly) across lower 48 states  
 - number of active oil and gas rigs in the US  
 - long-term (>= 15weeks) unemployment rate  
 - US manufacturing industry confidence indicator  
 - yield curve  
 
-## Interactive Plot
+## gdp forecasting
 
-```{r eruptions}
+```{r regression}
 inputPanel(
-  selectInput("n_breaks", label = "Number of bins:",
-              choices = c(10, 20, 35, 50), selected = 20),
-  
-  sliderInput("bw_adjust", label = "Bandwidth adjustment:",
-              min = 0.2, max = 2, value = 1, step = 0.2)
+  selectInput("n_lags", label = "Number of Months:",
+              choices = c(1,2,3,4,5,6), selected = 1),
+  sliderInput("train_test_adjust", label = "Train-Test Split:",
+              min = 0.1, max = 0.9, value = 0.7, step = 0.1)
 )
 
+lagged_predictors <- function(n_lags, predictor_df, n_predictors=12){
+  pred_df <- sapply(1:n_predictors, function(x){
+    lag(predictor_df[,x],n_lags)
+  } )
+  pred_df <- as.data.frame(pred_df)
+  return(pred_df)
+}
+predictors <- readRDS("predictors.RDS")
+
 renderPlot({
-  hist(faithful$eruptions, probability = TRUE, breaks = as.numeric(input$n_breaks),
-       xlab = "Duration (minutes)", main = "Geyser eruption duration")
   
-  dens <- density(faithful$eruptions, adjust = input$bw_adjust)
-  lines(dens, col = "blue")
+  # calculating lag
+  predictors_oml <- lagged_predictors(as.numeric(input$n_lags),predictors)
+  predictors_oml <- cbind(predictors$GDP_LOG, predictors_oml) %>%
+    drop_na()
+  colnames(predictors_oml)[1] <- "GDP_LOG"
+
+  
+  # sampling then testing
+  testIDs <- sample(1:dim(predictors_oml)[1], input$train_test_adjust*dim(predictors_oml)[1])
+  training_predictors_oml <- predictors_oml[testIDs,]
+  testing_predictors_oml <- predictors_oml[-testIDs,]
+  training_predictors_oml$GDP_LOG
+  gdp_oml_lm <- lm(GDP_LOG ~., data = training_predictors_oml)
+  # summary(gdp_oml_lm)
+
+  pred_gdp_log_oml <- predict.lm(gdp_oml_lm, newdata = testing_predictors_oml)
+  ggplot() + 
+    geom_point(aes(x = testing_predictors_oml$GDP_LOG, y = pred_gdp_log_oml)) + 
+    geom_abline(intercept = 0, slope = 1) + 
+    labs(x = "Actual Logged GDP",
+         y = "Predicted Logged GDP")
 })
 ```
 
-## Bullets
-
-- Bullet 1
-- Bullet 2
-- Bullet 3
-
-## R Output
-
-```{r cars}
-summary(cars)
+## growing the amazon  
+  
+```{r eval = FALSE, echo = TRUE}
+trctrl <- trainControl(method = "repeatedcv", 
+                       number = 10, repeats = 5, search = "grid")
+mtry <- ncol(train_x)
+ntrees <- 101
+tunegrid <- expand.grid(.mtry = c(2:mtry))
+metric <- "Accuracy"
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", 
+                      metric = metric, trControl = trctrl, 
+                      tuneGrid = tunegrid, ntree = ntrees)
+stopCluster(cl)
 ```
 
 
+## results
+with a **70-30** training-test split:  
+  
+```{r confusion matrix}
+rf_cm <- readRDS("./models/confusion_matrix_1mth_all.RDS")
+kable(rf_cm$table, caption = "confusion matrix | pred (v), ref (h)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T, position = "left")
+kable(t(rf_cm$byClass[5:8]), caption = "random forest performance") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F, position = "left")
+```
+
+## probabilistically speaking
+
+```{r random forest plot}
+rf_prob_plot <- readRDS("./models/ggplot_prob_model.RDS")
+rf_prob_plot
+```
+
+## pushing it just a little farther
+
+```{r}
+rf_cm <- readRDS("./models/confusion_matrix_2mth_all.RDS")
+kable(rf_cm$table, caption = "confusion matrix | pred (v), ref (h)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T, position = "left")
+kable(t(rf_cm$byClass[5:8]), caption = "random forest performance") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F, position = "left")
+```
+
+## probabilistically speaking again
+
+```{r}
+rf_prob_plot <- readRDS("./models/ggplot_prob_model_2.RDS")
+rf_prob_plot
+```
+
+
+## questions  
+
+source code: github.com/westerleyy/recession_predictR
