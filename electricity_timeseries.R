@@ -89,7 +89,7 @@ lower48_hourly_demand_df <-  cbind(date_time, demand) %>%
 
 
 ## all generation
-## last updated 3/26
+## last updated 4/26
 all_electricity_generation_monthly <- eia_series(id = "TOTAL.ELETPUS.M")
 all_electricity_generation_monthly_df <- unnest(all_electricity_generation_monthly, cols="data")
 all_electricity_generation_monthly_df <- all_electricity_generation_monthly_df %>%

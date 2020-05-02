@@ -15,7 +15,7 @@ library(RCurl)
 library(haven)
 fredr_set_key('30e6ecb242a73869e11cb35f6aa3afc3') # My key, please don't abuse.
 
-Pull <- readxl::read_excel("Pull.xlsx")
+Pull <- readxl::read_excel("./data/Pull.xlsx")
 attach(Pull)
 
 # Real GDP (Level) > Y

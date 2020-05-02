@@ -14,7 +14,7 @@ library(tidyverse)
 library(RCurl)
 library(haven)
 fredr_set_key('30e6ecb242a73869e11cb35f6aa3afc3') # My key, please don't abuse.
-Pull <- readxl::read_excel("Pull.xlsx")
+Pull <- readxl::read_excel("./data/Pull.xlsx")
 
 # Please dont use attach because its easy to mistake cols with other dfs in multi-df envts.
 # remember to detach once you are done to avoid errors down the line
