@@ -41,6 +41,13 @@ two models:
 - US manufacturing industry confidence indicator  
 - yield curve  
 
+## gdp forecast  
+looking ahead:  
+```{r forecast df}
+
+```
+
+
 ## gdp forecasting
 
 ```{r regression}
