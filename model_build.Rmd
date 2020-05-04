@@ -35,24 +35,213 @@ eia_set_key(eia_api_key)
 fredr_set_key(fred_api_key)
 
 # load datasets
-gdp <- readxl::read_excel("Monthly GDP for Project.xlsx")
+gdp <- readxl::read_excel("./data/Monthly GDP for Project.xlsx")
+Pull <- readxl::read_excel("./data/Pull.xlsx")
 
+# setting seed to ensure reproducibility
+set.seed(1728)
 ```
 
-## Data Processing  
+## Regression Analysis  
+  
+```{r}
+
+# Real GDP (Level) > Y
+
+#Probability of Losing a Job >X3
+#Job Openings per Unemployed Person >X4	
+#Ratio of Hires to Openings	> X5
+#Business Survey > X6
+#Business Survey (Peak Diff) > X7
+#Yield Curve	> X8
+#Excnomic Policy Index	> X9
+#Equity Uncertainty	> X10
+#Unemployment Rate (YoY) >X11
+
+LOGY <- log(Pull$Y) 
+LOGY1 <- log(lag(Pull$Y,1))
+
+AnnGDP <- (LOGY-LOGY1)*12
+GDP_LOG <- log(Pull$Y) 
+
+# X1 Functional Form Test
+
+X1Squared <- Pull$X1*Pull$X1
+X1Root <- sqrt(Pull$X1)
+TestX1 <- lm(AnnGDP~Pull$X1+X1Squared)
+TestX1
+stargazer(TestX1, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+A1 <- (Pull$X1+X1Squared)
+summary(TestX1)
+
+# X2 Functional Form Test
+
+X2Squared <- Pull$X2*Pull$X2
+X2Root <- sqrt(Pull$X2)
+TestX2 <- lm(AnnGDP~Pull$X2)
+TestX2
+stargazer(TestX2, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+A2 <- Pull$X2
+
+# X3 Functional Form Test
+
+X3Squared <- Pull$X3*Pull$X3
+X3Root <- sqrt(Pull$X3)
+TestX3 <- lm(AnnGDP~Pull$X3)
+TestX3
+stargazer(TestX3, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+A3 <- Pull$X3
+
+# X4 Functional Form Test
+
+X4Squared <- Pull$X4*Pull$X4
+X4Root <- sqrt(Pull$X4)
+TestX4 <-lm(AnnGDP~Pull$X4+X4Squared)
+TestX4
+stargazer(TestX4, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+A4=(Pull$X4+X4Squared)
+
+# X5 Functional Form Test
+
+X5Squared <- Pull$X5*Pull$X5
+X5Root <- sqrt(Pull$X5)
+TestX5 <- lm(AnnGDP~Pull$X5+X5Squared)
+TestX5
+stargazer(TestX5, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+A5 <- Pull$X5+X5Squared
+
+
+# X6 Functional Form Test
+X6Squared <- Pull$X6*Pull$X6
+X6Root <- sqrt(Pull$X6)
+TestX6 <- lm(AnnGDP~Pull$X6+X6Squared)
+TestX6
+stargazer(TestX6, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+A6 <- Pull$X6+X6Squared
+
+# X7 Functional Form Test
+X7Squared <- Pull$X7*Pull$X7
+X7Root <- sqrt(Pull$X7)
+TestX7 <- lm(AnnGDP~Pull$X7+X7Squared)
+TestX7
+stargazer(TestX7, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+A7 <- Pull$X7+X7Squared
+
+# X8 Functional Form Test
+X8Squared <- Pull$X8*Pull$X8
+X8Root <- sqrt(Pull$X8)
+TestX8 <- lm(AnnGDP~Pull$X8)
+TestX8
+stargazer(TestX8, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+A8 <- Pull$X8
+
+
+# X9 Functional Form Test
+X9Squared <- Pull$X9*Pull$X9
+X9Root <- sqrt(Pull$X9)
+TestX9 <- lm(AnnGDP~Pull$X9+X9Squared)
+TestX9
+stargazer(TestX9, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+A9 <- Pull$X9+X9Squared
+
+# X10 Functional Form Test
+X10Squared<- Pull$X10*Pull$X10
+X10Root <- sqrt(Pull$X10)
+TestX10 <- lm(AnnGDP~Pull$X10)
+TestX10
+stargazer(TestX10, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+A10 <- Pull$X10
+
+
+# X11 Functional Form Test
+X11Squared <- Pull$X11*Pull$X11
+X11Root <- sqrt(Pull$X11)
+TestX11 <- lm(AnnGDP~Pull$X11)
+TestX11
+stargazer(TestX11, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+A11 <- Pull$X11
+
+
+
+#First Test of All Best Form Variables
+
+CurrentGDP <- lm(GDP_LOG~ A3+A4+A5+A6+A7+A8+A9+A10+A11)
+CurrentGDP
+stargazer(CurrentGDP, type="text", title="Baseline Results", single.row=TRUE, 
+          ci=TRUE, ci.level=0.95)
+
+
+# Gathering all predictors 
+
+predictors <- cbind(A3,A4,A5,A6,A7,A8,A9,A10,A11,GDP_LOG) %>%
+  as.data.frame()
+
+saveRDS(predictors, "./models/predictors.RDS")
+# function to automate lag calculation
+lagged_predictors <- function(n_lags, predictor_df, n_predictors=10){
+  pred_df <- sapply(1:n_predictors, function(x){
+    lag(predictor_df[,x],n_lags)
+  } )
+  pred_df <- as.data.frame(pred_df)
+  return(pred_df)
+}
+
+# one month lag
+predictors_oml <- lagged_predictors(1,predictors)
+predictors_oml <- cbind(GDP_LOG, predictors_oml) %>%
+  drop_na()
+
+# sampling then testing
+testIDs <- sample(1:dim(predictors_oml)[1], 0.8*dim(predictors_oml)[1])
+training_predictors_oml <- predictors_oml[testIDs,]
+testing_predictors_oml <- predictors_oml[-testIDs,]
+gdp_oml_lm <- lm(GDP_LOG ~., data = training_predictors_oml)
+summary(gdp_oml_lm)
+
+pred_gdp_log_oml <- predict.lm(gdp_oml_lm, newdata = testing_predictors_oml)
+
+ggplot() + 
+  geom_point(aes(x = testing_predictors_oml$GDP_LOG, y = pred_gdp_log_oml)) + 
+  geom_abline(intercept = 0, slope = 1) + 
+  labs(x = "Actual Logged GDP",
+       y = "Predicted Logged GDP")
+
+training_res <- training_predictors_oml$GDP_LOG - predict(gdp_oml_lm, training_predictors_oml)
+holdout_res <- testing_predictors_oml$GDP_LOG - predict(gdp_oml_lm, testing_predictors_oml)
+# t-test to check whether predicted residuals are different from zero 
+t.test(holdout_res, mu = 0)
+# test whether holdout residuals and training residuals are the same
+t.test(training_res, holdout_res)
+```
+  
+
+## Data Processing for Random Forest  
 
 Relevant time scale: Monthly  
 Datasets: Electricity generation, Rigs count, GDP, OECD Business Tendency Survey, Percentage of Civilian Workforce Unemployed >15 weeks
 
 ```{r downloading datasets and initial processing, warning=FALSE}
-# load API key
-eia_api_key <- readtext::readtext("eia_api_key.txt") %>%
-  .$text
-fred_api_key <- readtext::readtext("fred_api_key.txt") %>%
-  .$text
-eia_set_key(eia_api_key)
-fredr_set_key(fred_api_key)
-
 ## pct labor force unemloyed for more than 15 weeks
 LT_unemployed <- fredr(series_id = "U1RATE", observation_start = as.Date("1973-01-01"))
 ## yield curve 10year minue 3month
@@ -406,7 +595,7 @@ tree_func <- function(final_model,
 }
 
 tree_num <- which(rf_recession$finalModel$forest$ndbigtree == min(rf_recession$finalModel$forest$ndbigtree))
-tree_plot <- tree_func(final_model = rf_recession$finalModel, 12)
+tree_plot <- tree_func(final_model = rf_recession$finalModel, tree_num[1])
 saveRDS(tree_plot, "./models/tree_plot.RDS")
 ```
 
