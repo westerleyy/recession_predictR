@@ -15,7 +15,7 @@ Recession prediction can be thought of as an exercise of two parts, GDP predicti
  - Equity Uncertainty  
   
 **How to Access**  
-Ensure that you have an Energy Information Administration and St. Louis Fed Research API keys before running the `model_build.Rmd`.  
+Ensure that you have an Energy Information Administration and St. Louis Fed Research API keys before running `model_build.Rmd`.  
 Ensure that you have the **latest** repo cloned.  
 Ensure that the relevant packages are installed, especially `shiny`, before running `model_presentation.Rmd` as it is an `ioslide` with a `shiny` feature embedded.  
   
