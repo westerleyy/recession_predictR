@@ -10,12 +10,15 @@ Recession prediction can be thought of as an exercise of two parts, GDP predicti
  - Electricity generated in the lower 48 states (hourly)  
  - OECD Business Tendency Surveys for Manufacturing: United States  
  - Number of active oil and natural gas rigs  
- - Long-term unemployment rate  
+ - Employment: Long-term unemployment rate, Probability of job loss; Job openings; Ratio of hires to openings  
+ - Economic Policy Index  
+ - Equity Uncertainty  
   
 **How to Access**  
-Ensure that you have an Energy Information Administration and St. Louis Fed Research API keys before running the `model_build.Rmd`.  
+Ensure that you have an Energy Information Administration and St. Louis Fed Research API keys before running `model_build.Rmd`.  
+Ensure that you have the **latest** repo cloned.  
 Ensure that the relevant packages are installed, especially `shiny`, before running `model_presentation.Rmd` as it is an `ioslide` with a `shiny` feature embedded.  
   
 Cheers,  
-Wesley Chioh and Jonathan O'Kane | May 2, 2020 
+Wesley Chioh and Jonathan O'Kane | May 4, 2020 
  
