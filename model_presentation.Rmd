@@ -38,7 +38,7 @@ the random forest learns which months are contractionary as defined by NBER.
  - Equity Uncertainty  
  - Unemployment Rate (YoY)
   
-## random forest datsets   
+## random forest datasets   
   
 - gdp  
 - amt. of electricity generated (monthly) across lower 48 states  
@@ -194,6 +194,18 @@ rf_prob_plot <- readRDS("./models/ggplot_prob_model_2.RDS")
 rf_prob_plot
 ```
 
+## bringing it to the present  
+  
+```{r forecast df2}
+econ_state <- c("Prob. Expansion", "Prob. Contraction")
+April20 <- c("86.14%", "13.86%")
+May20 <- c("92.08%", "7.92%")
+forecast_df2 <- cbind(econ_state, April20, May20) %>%
+  data.frame()
+colnames(forecast_df2) <- c("Econ. State", "April 2020", "May 2020")
+kable(forecast_df2) %>%
+  kable_styling(bootstrap_options = c("striped","hover", "condensed"))
+```  
 
 ## questions  
 
