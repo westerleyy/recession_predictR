@@ -19,9 +19,15 @@ library(ggplot2)
   
 two models:  
 - linear regression: point estimates of future GDP  
-- random forest: using gdp and other variables to predict economic state  
+- random forest: using gdp and other variables to predict binary economic state  
   
-## regression data sources  
+## recession  
+  
+*"The NBER does not define a recession in terms of two consecutive quarters of decline in real GDP. Rather, a recession is a significant decline in economic activity spread across the economy, lasting more than a few months, normally visible in real GDP, real income, employment, industrial production, and wholesale-retail sales"* - [NBER, 2010](https://www.nber.org/cycles.html)  
+
+the random forest learns which months are contractionary as defined by NBER.  
+  
+## regression data datasets  
   
  - Probability of Losing a Job  
  - Job Openings per Unemployed Person  
@@ -32,7 +38,7 @@ two models:
  - Equity Uncertainty  
  - Unemployment Rate (YoY)
   
-## random forest data sources  
+## random forest datsets   
   
 - gdp  
 - amt. of electricity generated (monthly) across lower 48 states  
@@ -40,15 +46,33 @@ two models:
 - long-term (>= 15weeks) unemployment rate  
 - US manufacturing industry confidence indicator  
 - yield curve  
+  
+## data sources  
+  
+- Energy Information Administration  
+- Federal Reserve  
+- Organization for Economic Co-operation and Development  
+- National Bureau of Economic Research  
+- IHS Markit  
 
-## gdp forecast  
-looking ahead:  
+
+## annualized gdp change forecast  
+looking ahead based on February 2020 data:    
+  
 ```{r forecast df}
-
+month <- c("March 2020", "April 2020","May 2020")
+one_month <- c("6.27%", NA, NA)
+two_month <- c("1.4%", "5.0%", NA)
+three_month <- c("2.62%", "2.02%", "3.37%")
+forecast_df <- cbind(month, one_month, two_month, three_month) %>%
+  data.frame()
+colnames(forecast_df) <- c("Month", "One Month", "Two Months", "Three Months")
+kable(forecast_df) %>%
+  kable_styling(bootstrap_options = c("striped","hover", "condensed"))
 ```
 
 
-## gdp forecasting
+## shiny x gdp forecasting
 
 ```{r regression}
 inputPanel(
@@ -87,6 +111,25 @@ renderPlot({
     labs(x = "Actual Logged GDP",
          y = "Predicted Logged GDP")
 })
+```
+
+## dull side of things  
+```{r eval = FALSE, echo=TRUE}
+lagged_predictors <- function(n_lags, predictor_df, n_predictors=10){
+  pred_df <- sapply(1:n_predictors, function(x){
+    lag(predictor_df[,x],n_lags) })
+  pred_df <- as.data.frame(pred_df)
+  return(pred_df)}
+predictors <- readRDS("./models/predictors.RDS")
+predictors_oml <- lagged_predictors(as.numeric(input$n_lags),predictors)
+predictors_oml <- cbind(predictors$GDP_LOG, predictors_oml) %>% drop_na()
+testIDs <- sample(1:dim(predictors_oml)[1], 
+                  input$train_test_adjust*dim(predictors_oml)[1])
+training_predictors_oml <- predictors_oml[testIDs,]
+testing_predictors_oml <- predictors_oml[-testIDs,]
+gdp_oml_lm <- lm(GDP_LOG ~., data = training_predictors_oml)
+pred_gdp_log_oml <- predict.lm(gdp_oml_lm, 
+                               newdata = testing_predictors_oml)
 ```
 
 
