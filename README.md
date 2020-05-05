@@ -25,7 +25,7 @@ Ensure that the relevant packages are installed, especially `shiny`, before runn
 3. Open the entire repo with the RProj file in RStudio.  
 4. Open `model_presentation.Rmd`.  
 5. Click `Run Presentation` near the top of the window.  
-6. A new window should open with the presentation. If not, your console should have a web address something like http://127.0.0.xxxx. Copy that address into a web browser of your choice and the presentation will show.  
+6. A new window should open with the presentation. If not, your console should have a web address something like http://127.0.0.xxxx. Copy that address into a web browser of your choice and the presentation will start.  
 
 Cheers,  
 Wesley Chioh and Jonathan O'Kane | May 5, 2020 
