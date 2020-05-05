@@ -24,7 +24,8 @@ library(lubridate)
 library(jsonlite)
 library(ggraph)
 library(igraph)
-set.seed(1728)
+library(kableExtra)
+
 
 # load API key
 eia_api_key <- readtext::readtext("eia_api_key.txt") %>%
@@ -39,7 +40,7 @@ gdp <- readxl::read_excel("./data/Monthly GDP for Project.xlsx")
 Pull <- readxl::read_excel("./data/Pull.xlsx")
 
 # setting seed to ensure reproducibility
-set.seed(1728)
+set.seed(0506)
 ```
 
 ## Regression Analysis  
@@ -470,11 +471,11 @@ metric = "Accuracy"
 # following can be commented out if loading a pretrained model from file 
 # parallel processing to speed things up
 # random forest model 
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid, ntree = ntrees)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/rf_1mth_all.RDS")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid, ntree = ntrees)
+stopCluster(cl)
+saveRDS(rf_recession, "./models/rf_1mth_all.RDS")
 rf_recession <- readRDS("./models/rf_1mth_all.RDS")
 predict_y <- predict(rf_recession, newdata = test_x)
 predict_y_prob <- predict(rf_recession,newdata = test_x, "prob")
@@ -494,8 +495,6 @@ saveRDS(prob_model, "./models/ggplot_prob_model.RDS")
 prob_model
 ```
 
-
-
 ```{r random_forest two month, fig.height=8, fig.width=8}
 # creating test-train data
 testIDs <- createDataPartition(econ_situation_nber_df$NBER_recession_two, p = 0.7, list = F)
@@ -514,14 +513,14 @@ metric = "Accuracy"
 # following can be commented out if loading a pretrained model from file 
 # parallel processing to speed things up
 # random forest model 
-# cl <- makePSOCKcluster(5)
-# registerDoParallel(cl)
-# rf_recession <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid, ntree = ntrees)
-# stopCluster(cl)
-# saveRDS(rf_recession, "./models/rf_2mth_all.RDS")
-rf_recession <- readRDS("./models/rf_2mth_all.RDS")
-predict_y <- predict(rf_recession, newdata = test_x)
-predict_y_prob <- predict(rf_recession,newdata = test_x, "prob")
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+rf_recession2 <- train(x = train_x, y = train_y, method = "rf", metric = metric, trControl = trctrl, tuneGrid = tunegrid, ntree = ntrees)
+stopCluster(cl)
+saveRDS(rf_recession2, "./models/rf_2mth_all.RDS")
+rf_recession2 <- readRDS("./models/rf_2mth_all.RDS")
+predict_y <- predict(rf_recession2, newdata = test_x)
+predict_y_prob <- predict(rf_recession2,newdata = test_x, "prob")
 predict_y_prob$date <- econ_situation_nber_df$date[-testIDs]
 predict_y_prob$actual <- test_y
 predict_y_prob$predicted <- predict_y
@@ -536,6 +535,21 @@ prob_model_2 <- ggplotly(ggplot(predict_y_prob, aes(x = date, y = Y)) +
                               title = "Probability of a Recession 2 Months Ahead", subtitle = "Probabilistic Prediction of a Random Forest Model"))
 saveRDS(prob_model_2, "./models/ggplot_prob_model_2.RDS")
 prob_model_2
+```
+
+```{r testing for predicted march data}
+gdp_change_lagged <- -0.655704
+test_data_2 <- cbind(gdp_change_lagged, electricity_complete[567,2:3], rigs_complete[567,2:3], business_sentiment[567,2:5], LT_unemployed_complete[567, 2:5], yield_curve[459,2])
+predict_y_prob_april20 <- predict(rf_recession,newdata = test_data_2, "prob")
+predict_y_prob_may20 <- predict(rf_recession2,newdata = test_data_2, "prob")
+econ_state <- c("Expansion", "Contraction")
+predict_y_prob_april20
+predict_y_prob_may20
+forecast_df2 <- cbind(econ_state, t(predict_y_prob_april20), t(predict_y_prob_may20)) %>%
+  data.frame()
+colnames(forecast_df2) <- c("Econ. State", "April 2020", "May 2020")
+kable(forecast_df2, caption = "R.F. Predictions based on March 2020") %>%
+  kable_styling(bootstrap_options = c("striped","hover", "condensed"))
 ```
 
 ### Visualizing Random Forest  
